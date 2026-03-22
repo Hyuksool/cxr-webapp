@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python deps
-COPY requirements.txt .
+# Build context is repo root, so prefix with cxr-backend/
+COPY cxr-backend/requirements.txt .
 
 # Install CPU-only torch first (smaller image), then other deps
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
@@ -33,7 +34,7 @@ RUN python3 -c "from transformers import CLIPProcessor, CLIPModel; \
     print('CLIP model cached')" || echo "CLIP pre-download failed — will download on first use"
 
 # Copy source code
-COPY *.py ./
+COPY cxr-backend/*.py ./
 
 # Expose port
 ENV PORT=8200
