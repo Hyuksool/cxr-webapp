@@ -230,7 +230,15 @@ Important:
         report_text = ""
         async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
             if hasattr(msg, "content"):
-                report_text += msg.content
+                content = msg.content
+                if isinstance(content, list):
+                    for block in content:
+                        if hasattr(block, "text"):
+                            report_text += block.text
+                        elif isinstance(block, dict) and "text" in block:
+                            report_text += block["text"]
+                elif isinstance(content, str):
+                    report_text += content
 
         # Parse sections
         sections = {}

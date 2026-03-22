@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies + Node.js (for Claude CLI)
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
@@ -11,7 +11,13 @@ RUN apt-get update && apt-get install -y \
     libxrender-dev \
     libgomp1 \
     wget \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Claude CLI globally (required for claude_agent_sdk)
+RUN npm install -g @anthropic-ai/claude-code --yes
 
 # Copy requirements and install Python deps
 # Build context is repo root, so prefix with cxr-backend/
