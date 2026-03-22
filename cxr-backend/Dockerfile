@@ -20,8 +20,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
-# TorchXRayVision model weights are downloaded automatically on first use
-# (~100MB DenseNet checkpoint from HuggingFace/PyTorch Hub)
+# Set HuggingFace cache to persistent /app/.cache
+ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
+ENV HF_HOME=/app/.cache/huggingface
+ENV TORCH_HOME=/app/.cache/torch
+
+# Pre-download CLIP model during build (avoids cold-start delay)
+# Comment out if build time is too long; model will download on first request
+RUN python3 -c "from transformers import CLIPProcessor, CLIPModel; \
+    CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32'); \
+    CLIPModel.from_pretrained('openai/clip-vit-base-patch32'); \
+    print('CLIP model cached')" || echo "CLIP pre-download failed — will download on first use"
 
 # Copy source code
 COPY *.py ./
@@ -30,7 +39,7 @@ COPY *.py ./
 ENV PORT=8200
 EXPOSE ${PORT}
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=15s --start-period=300s --retries=5 \
     CMD python3 -c "import os,urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\",\"8200\")}/health')"
 
 CMD sh -c "uvicorn server:app --host 0.0.0.0 --port ${PORT} --workers 1"
