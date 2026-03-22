@@ -109,38 +109,49 @@ class ReportResponse(BaseModel):
 # ─────────────────────────────────────────────
 
 async def _call_claude(prompt: str) -> str:
-    """Call Claude for text generation via Claude CLI/SDK only.
+    """Call Claude for text generation.
 
-    Uses claude_agent_sdk (Claude Code CLI) — no direct Anthropic API calls.
-    Removes ANTHROPIC_API_KEY to force Claude Max subscription auth,
-    mirroring the ECG webapp approach.
+    Strategy:
+    1. If ANTHROPIC_API_KEY is set (Railway/deployed): use Anthropic SDK directly
+    2. Otherwise (local dev with Claude Max): use claude_agent_sdk CLI
     """
-    from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
-    # Remove ANTHROPIC_API_KEY to force Claude Max subscription auth (not API credits)
-    # If the key is present, claude_agent_sdk may attempt API-key auth which can fail
-    _removed_key = os.environ.pop("ANTHROPIC_API_KEY", None)
-    try:
+    if api_key:
+        # Direct Anthropic SDK — works in Railway Docker without CLI auth
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        response = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
         result_text = ""
-        async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
-            if hasattr(msg, "content"):
-                content = msg.content
-                if isinstance(content, list):
-                    for block in content:
-                        if hasattr(block, "text"):
-                            result_text += block.text
-                        elif isinstance(block, dict) and "text" in block:
-                            result_text += block["text"]
-                elif isinstance(content, str):
-                    result_text += content
-
+        for block in response.content:
+            if hasattr(block, "text"):
+                result_text += block.text
         if not result_text.strip():
-            raise RuntimeError("Claude CLI returned empty response")
+            raise RuntimeError("Anthropic API returned empty response")
         return result_text
-    finally:
-        # Restore the key so other subsystems are unaffected
-        if _removed_key is not None:
-            os.environ["ANTHROPIC_API_KEY"] = _removed_key
+
+    # Fallback: Claude CLI/SDK (local dev with Claude Max subscription)
+    from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
+    result_text = ""
+    async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
+        if hasattr(msg, "content"):
+            content = msg.content
+            if isinstance(content, list):
+                for block in content:
+                    if hasattr(block, "text"):
+                        result_text += block.text
+                    elif isinstance(block, dict) and "text" in block:
+                        result_text += block["text"]
+            elif isinstance(content, str):
+                result_text += content
+
+    if not result_text.strip():
+        raise RuntimeError("Claude CLI returned empty response")
+    return result_text
 
 
 # ─────────────────────────────────────────────
