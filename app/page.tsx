@@ -61,24 +61,28 @@ export default function Home() {
       // Step 2: Generate radiology report
       setState("generating-report");
 
-      const reportRes = await fetch(reportUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          findings: analysisData.findings,
-          urgency_level: analysisData.urgency_level,
-          confidence_score: analysisData.confidence_score,
-          no_finding_probability: analysisData.no_finding_probability,
-        }),
-        signal: AbortSignal.timeout(300_000), // 5 min — Claude CLI can take 90s
-      });
-      const reportJson = await reportRes.json();
-
-      if (!reportRes.ok || !reportJson.success) {
-        throw new Error(reportJson.error || `Report generation failed: ${reportRes.status}`);
+      try {
+        const reportRes = await fetch(reportUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            findings: analysisData.findings,
+            urgency_level: analysisData.urgency_level,
+            confidence_score: analysisData.confidence_score,
+            no_finding_probability: analysisData.no_finding_probability,
+          }),
+          signal: AbortSignal.timeout(300_000), // 5 min — Claude CLI can take 90s
+        });
+        const reportJson = await reportRes.json();
+        // Show report if available; gracefully skip if generation failed
+        if (reportRes.ok && reportJson.success && reportJson.data) {
+          setReport(reportJson.data);
+        }
+        // Analysis findings are already shown — don't block on report failure
+      } catch {
+        // Report generation failed; findings panel still visible
       }
 
-      setReport(reportJson.data);
       setState("done");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error occurred");

@@ -112,26 +112,35 @@ async def _call_claude(prompt: str) -> str:
     """Call Claude for text generation via Claude CLI/SDK only.
 
     Uses claude_agent_sdk (Claude Code CLI) — no direct Anthropic API calls.
-    This mirrors the ECG webapp approach.
+    Removes ANTHROPIC_API_KEY to force Claude Max subscription auth,
+    mirroring the ECG webapp approach.
     """
     from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
 
-    result_text = ""
-    async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
-        if hasattr(msg, "content"):
-            content = msg.content
-            if isinstance(content, list):
-                for block in content:
-                    if hasattr(block, "text"):
-                        result_text += block.text
-                    elif isinstance(block, dict) and "text" in block:
-                        result_text += block["text"]
-            elif isinstance(content, str):
-                result_text += content
+    # Remove ANTHROPIC_API_KEY to force Claude Max subscription auth (not API credits)
+    # If the key is present, claude_agent_sdk may attempt API-key auth which can fail
+    _removed_key = os.environ.pop("ANTHROPIC_API_KEY", None)
+    try:
+        result_text = ""
+        async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
+            if hasattr(msg, "content"):
+                content = msg.content
+                if isinstance(content, list):
+                    for block in content:
+                        if hasattr(block, "text"):
+                            result_text += block.text
+                        elif isinstance(block, dict) and "text" in block:
+                            result_text += block["text"]
+                elif isinstance(content, str):
+                    result_text += content
 
-    if not result_text.strip():
-        raise RuntimeError("Claude CLI returned empty response")
-    return result_text
+        if not result_text.strip():
+            raise RuntimeError("Claude CLI returned empty response")
+        return result_text
+    finally:
+        # Restore the key so other subsystems are unaffected
+        if _removed_key is not None:
+            os.environ["ANTHROPIC_API_KEY"] = _removed_key
 
 
 # ─────────────────────────────────────────────
@@ -297,7 +306,49 @@ Important:
     except Exception as e:
         import traceback
         traceback.print_exc()
+        # Always return success=True with fallback report so UI can display findings.
+        # Never return success=False from this endpoint.
+        _err_str = f"{type(e).__name__}: {e}"
+        try:
+            findings_text = "\n".join(
+                f"  - {f.get('name', 'Unknown')}: {f.get('probability', 0)*100:.1f}% probability ({f.get('urgency', 'unknown')} urgency)"
+                for f in (req.findings or [])
+            ) or "  No significant findings detected."
+            findings_summary = "\n".join(
+                f"{f.get('name', 'Unknown')}: {f.get('probability', 0)*100:.1f}% ({f.get('urgency', 'unknown')})"
+                for f in (req.findings or [])
+            ) or "No significant findings."
+        except Exception:
+            findings_text = "  Unable to parse findings."
+            findings_summary = "Unable to parse findings."
+
+        fallback_text = "\n".join([
+            "CLINICAL INDICATION: AI-assisted chest X-ray analysis.",
+            "",
+            "TECHNIQUE: Standard chest radiograph (AI analysis only).",
+            "",
+            "FINDINGS:",
+            findings_text,
+            "",
+            f"IMPRESSION: {req.urgency_level.upper()} urgency. Confidence: {req.confidence_score*100:.1f}%.",
+            "",
+            "RECOMMENDATIONS: Clinical correlation required. AI narrative report unavailable — consult a radiologist.",
+            "",
+            f"NOTE: Automated report generation failed ({_err_str}). "
+            "This is a fallback summary based on raw AI findings only.",
+        ])
         return ReportResponse(
-            success=False,
-            error=f"Report generation failed: {type(e).__name__}: {e}",
+            success=True,
+            data={
+                "report": fallback_text,
+                "sections": {
+                    "CLINICAL INDICATION": "AI-assisted chest X-ray analysis.",
+                    "FINDINGS": findings_summary,
+                    "IMPRESSION": f"{req.urgency_level.upper()} urgency. Confidence: {req.confidence_score*100:.1f}%.",
+                    "RECOMMENDATIONS": "Clinical correlation required. Consult a radiologist.",
+                },
+                "urgency_level": req.urgency_level,
+                "model": "fallback (Claude CLI unavailable)",
+                "error": _err_str,
+            },
         )
