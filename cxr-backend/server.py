@@ -165,17 +165,16 @@ async def _call_claude(prompt: str) -> str:
 @app.on_event("startup")
 async def startup():
     print("Starting CXR Analysis Server...")
-    success = preload_cxr_model()
-    if success:
-        print("CXR model loaded successfully")
-    else:
-        print("WARNING: CXR model not loaded — classification disabled")
+    loop = asyncio.get_event_loop()
 
-    zs_success = preload_zero_shot_model()
-    if zs_success:
-        print("Zero-shot CLIP model loaded successfully")
-    else:
-        print("INFO: Zero-shot model not loaded — zero-shot analysis disabled")
+    # Load both models in parallel threads to reduce cold-start time
+    densenet_ok, clip_ok = await asyncio.gather(
+        loop.run_in_executor(None, preload_cxr_model),
+        loop.run_in_executor(None, preload_zero_shot_model),
+    )
+
+    print("CXR model loaded successfully" if densenet_ok else "WARNING: CXR model not loaded — classification disabled")
+    print("Zero-shot CLIP model loaded successfully" if clip_ok else "INFO: Zero-shot model not loaded — zero-shot analysis disabled")
 
 
 # ─────────────────────────────────────────────
@@ -214,10 +213,13 @@ async def analyze_cxr(cxr_image: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="File too large (max 20MB)")
 
     try:
-        result = classify_cxr_image(image_bytes)
+        loop = asyncio.get_event_loop()
 
-        # Run zero-shot analysis (independent of TorchXRayVision)
-        zs_result = classify_zero_shot(image_bytes)
+        # Run both models in parallel threads (non-blocking async event loop)
+        result, zs_result = await asyncio.gather(
+            loop.run_in_executor(None, classify_cxr_image, image_bytes),
+            loop.run_in_executor(None, classify_zero_shot, image_bytes),
+        )
 
         return CXRAnalysisResponse(
             success=True,

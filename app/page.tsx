@@ -28,6 +28,12 @@ export default function Home() {
     setState("idle");
   }, []);
 
+  // Direct Railway URL bypasses Vercel 10s timeout limit on Hobby plan.
+  // Set NEXT_PUBLIC_CXR_BACKEND_URL in Vercel env vars to Railway service URL.
+  const BACKEND = process.env.NEXT_PUBLIC_CXR_BACKEND_URL || "";
+  const analyzeUrl = BACKEND ? `${BACKEND}/analyze` : "/api/analyze-cxr";
+  const reportUrl = BACKEND ? `${BACKEND}/report` : "/api/report";
+
   const handleAnalyze = useCallback(async () => {
     if (!imageFile) return;
     setState("analyzing");
@@ -38,9 +44,10 @@ export default function Home() {
       const formData = new FormData();
       formData.append("cxr_image", imageFile);
 
-      const analysisRes = await fetch("/api/analyze-cxr", {
+      const analysisRes = await fetch(analyzeUrl, {
         method: "POST",
         body: formData,
+        signal: AbortSignal.timeout(300_000), // 5 min — Railway CPU cold start
       });
       const analysisJson = await analysisRes.json();
 
@@ -54,7 +61,7 @@ export default function Home() {
       // Step 2: Generate radiology report
       setState("generating-report");
 
-      const reportRes = await fetch("/api/report", {
+      const reportRes = await fetch(reportUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -63,6 +70,7 @@ export default function Home() {
           confidence_score: analysisData.confidence_score,
           no_finding_probability: analysisData.no_finding_probability,
         }),
+        signal: AbortSignal.timeout(300_000), // 5 min — Claude CLI can take 90s
       });
       const reportJson = await reportRes.json();
 
