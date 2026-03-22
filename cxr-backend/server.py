@@ -2,7 +2,7 @@
 CXR Analysis FastAPI Server.
 
 Uses TorchXRayVision DenseNet for 18-pathology classification,
-GradCAM for localization, and Claude for radiology report generation.
+GradCAM for localization, and Claude CLI/SDK for radiology report generation.
 
 Usage:
     uvicorn server:app --host 0.0.0.0 --port 8200
@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-import anthropic
+import asyncio
 import torch
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,18 +48,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Anthropic client (lazy init)
-_ANTHROPIC_CLIENT = None
-
-
-def get_anthropic_client() -> anthropic.Anthropic:
-    global _ANTHROPIC_CLIENT
-    if _ANTHROPIC_CLIENT is None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY environment variable not set")
-        _ANTHROPIC_CLIENT = anthropic.Anthropic(api_key=api_key)
-    return _ANTHROPIC_CLIENT
+# Claude CLI/SDK for report generation (no direct Anthropic API calls)
 
 
 # ─────────────────────────────────────────────
@@ -200,8 +189,6 @@ async def generate_report(req: ReportRequest):
     Generate radiology report using Claude based on CXR findings.
     """
     try:
-        client = get_anthropic_client()
-
         # Build findings summary for Claude
         if not req.findings:
             findings_text = "No significant findings detected."
@@ -238,13 +225,12 @@ Important:
 - If no findings, state clearly normal study
 - This is AI-assisted, not a replacement for clinical judgment"""
 
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
 
-        report_text = response.content[0].text
+        report_text = ""
+        async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
+            if hasattr(msg, "content"):
+                report_text += msg.content
 
         # Parse sections
         sections = {}
@@ -277,7 +263,7 @@ Important:
                 "report": report_text,
                 "sections": sections,
                 "urgency_level": req.urgency_level,
-                "model": "claude-sonnet-4-6",
+                "model": "claude-agent-sdk/sonnet",
             },
         )
 
