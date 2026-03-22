@@ -38,7 +38,7 @@ export default function FindingsPanel({ result }: FindingsPanelProps) {
             <p className="mt-1 text-sm text-gray-700">
               {result.findings.length === 0
                 ? "No significant findings detected"
-                : `${result.findings.length} finding${result.findings.length > 1 ? "s" : ""} detected`}
+                : `Top ${result.findings.length} differential diagnoses ranked by AI probability`}
             </p>
           </div>
           <div className="text-right">
@@ -50,11 +50,11 @@ export default function FindingsPanel({ result }: FindingsPanelProps) {
         </div>
       </div>
 
-      {/* TorchXRayVision Findings */}
+      {/* TorchXRayVision Findings — always shown */}
       {result.findings.length > 0 && (
         <div>
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
-            Findings — TorchXRayVision DenseNet
+            AI Differential Diagnosis — TorchXRayVision DenseNet
           </h3>
           <div className="space-y-2">
             {result.findings.map((finding) => {

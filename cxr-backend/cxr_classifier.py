@@ -90,8 +90,11 @@ URGENCY_MAP = {
     "No Finding": "normal",
 }
 
-# Classification threshold
-CLASSIFICATION_THRESHOLD = 0.2
+# Classification threshold — pathologies above this are flagged as findings
+CLASSIFICATION_THRESHOLD = 0.05
+
+# Always return at least this many top pathologies as findings (excluding No Finding)
+MIN_FINDINGS_COUNT = 5
 
 # Global model cache
 _CXR_MODEL: Optional[object] = None
@@ -259,17 +262,29 @@ def classify_cxr_image(image_bytes: bytes) -> dict:
                 "urgency": urgency,
             })
 
-            # Escalate urgency level
-            if urgency == "critical":
-                urgency_level = "critical"
-            elif urgency == "urgent" and urgency_level not in ("critical",):
-                urgency_level = "urgent"
-            elif urgency == "routine" and urgency_level == "normal":
-                urgency_level = "routine"
+            # Escalate urgency level (use 0.2 threshold for urgency decisions)
+            if prob_float >= 0.2:
+                if urgency == "critical":
+                    urgency_level = "critical"
+                elif urgency == "urgent" and urgency_level not in ("critical",):
+                    urgency_level = "urgent"
+                elif urgency == "routine" and urgency_level == "normal":
+                    urgency_level = "routine"
 
     # Sort findings by probability descending
     findings.sort(key=lambda x: x["probability"], reverse=True)
     pathology_results.sort(key=lambda x: x["probability"], reverse=True)
+
+    # Guarantee minimum findings — always show at least MIN_FINDINGS_COUNT diagnoses
+    # This ensures diagnosis names ALWAYS appear regardless of model confidence
+    if len(findings) < MIN_FINDINGS_COUNT:
+        shown_names = {f["name"] for f in findings}
+        candidates = [p for p in pathology_results if p["name"] != "No Finding" and p["name"] not in shown_names]
+        for p in candidates:
+            if len(findings) >= MIN_FINDINGS_COUNT:
+                break
+            findings.append(p)
+        findings.sort(key=lambda x: x["probability"], reverse=True)
 
     # No Finding check
     no_finding_idx = list(model_pathologies).index("No Finding") if "No Finding" in model_pathologies else -1
