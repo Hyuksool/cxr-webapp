@@ -227,18 +227,22 @@ Important:
 
         from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
 
+        def _extract_text(value) -> str:
+            """Recursively extract text from SDK response values."""
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                return "".join(_extract_text(item) for item in value)
+            if isinstance(value, dict):
+                return _extract_text(value.get("text", ""))
+            if hasattr(value, "text"):
+                return _extract_text(value.text)
+            return str(value) if value else ""
+
         report_text = ""
         async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
             if hasattr(msg, "content"):
-                content = msg.content
-                if isinstance(content, list):
-                    for block in content:
-                        if hasattr(block, "text"):
-                            report_text += block.text
-                        elif isinstance(block, dict) and "text" in block:
-                            report_text += block["text"]
-                elif isinstance(content, str):
-                    report_text += content
+                report_text += _extract_text(msg.content)
 
         # Parse sections
         sections = {}
