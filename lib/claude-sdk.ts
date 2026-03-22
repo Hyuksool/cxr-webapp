@@ -1,5 +1,4 @@
 import { spawn } from "child_process";
-import type Anthropic from "@anthropic-ai/sdk";
 
 export interface ClaudeCLIOptions {
   tools?: string[];
@@ -9,61 +8,13 @@ export interface ClaudeCLIOptions {
 }
 
 /**
- * Call Claude via Anthropic API (preferred) or CLI (fallback).
- *
- * If ANTHROPIC_API_KEY is set → uses SDK directly (~2-3s).
- * Otherwise → spawns `claude` CLI process (~15-20s).
+ * Call Claude via CLI in non-interactive mode.
+ * Uses Claude Max subscription — no API key needed.
+ * ANTHROPIC_API_KEY is explicitly removed from env to force Max auth.
  */
 export async function queryClaudeCLI(
   prompt: string,
   options: ClaudeCLIOptions = {}
-): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-
-  if (apiKey) {
-    return queryAnthropicAPI(prompt, options, apiKey);
-  }
-
-  return queryViaCLI(prompt, options);
-}
-
-/**
- * Direct Anthropic API call via SDK. Fast (~2-3s).
- */
-async function queryAnthropicAPI(
-  prompt: string,
-  options: ClaudeCLIOptions,
-  apiKey: string
-): Promise<string> {
-  const Anthropic = (await import("@anthropic-ai/sdk")).default;
-  const client = new Anthropic({ apiKey });
-
-  const modelMap: Record<string, string> = {
-    haiku: "claude-haiku-4-5-20251001",
-    sonnet: "claude-sonnet-4-6-20250311",
-    opus: "claude-opus-4-6-20250311",
-  };
-  const model = modelMap[options.model || "haiku"] || modelMap.haiku;
-
-  const message = await client.messages.create({
-    model,
-    max_tokens: 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const textBlocks = message.content.filter((b) => b.type === "text") as Array<{ type: "text"; text: string }>;
-  const text = textBlocks.map((b) => b.text).join("");
-
-  return text.trim();
-}
-
-/**
- * Fallback: Claude CLI in non-interactive mode.
- * Uses the existing Claude Code subscription — no API key needed.
- */
-function queryViaCLI(
-  prompt: string,
-  options: ClaudeCLIOptions
 ): Promise<string> {
   const args = [
     "-p",
@@ -86,9 +37,13 @@ function queryViaCLI(
     args.push("--add-dir", ...options.addDirs);
   }
 
+  // Remove ANTHROPIC_API_KEY to force Claude Max subscription auth
+  const envCopy: Record<string, string | undefined> = { ...process.env, NO_COLOR: "1" };
+  delete envCopy.ANTHROPIC_API_KEY;
+
   return new Promise((resolve, reject) => {
     const child = spawn("claude", args, {
-      env: { ...process.env, NO_COLOR: "1" },
+      env: envCopy as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
 

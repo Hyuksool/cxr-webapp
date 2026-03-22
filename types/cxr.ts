@@ -33,4 +33,5 @@ export interface ReportResult {
   sections: Record<string, string>;
   urgency_level: string;
   model: string;
+  primary_diagnosis?: string;
 }

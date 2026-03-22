@@ -22,42 +22,99 @@ const URGENCY_LABELS = {
   info: "INFO",
 };
 
+// Client-side primary diagnosis synthesis from findings
+const DIAGNOSIS_GROUPS: Record<string, string[]> = {
+  "Pneumonia / Infection": ["Pneumonia", "Consolidation", "Infiltration"],
+  "Pulmonary Edema / CHF": ["Edema", "Cardiomegaly", "Pleural Effusion", "Effusion"],
+  "Pneumothorax": ["Pneumothorax"],
+  "Mass / Nodule": ["Mass", "Nodule", "Lung Lesion"],
+  "Interstitial Disease": ["Fibrosis", "Emphysema"],
+};
+
+function derivePrimaryDiagnosis(findings: CXRAnalysisResult["findings"]): { primary: string; differentials: string[] } {
+  if (findings.length === 0) return { primary: "No significant pathology", differentials: [] };
+
+  const groupScores: Record<string, number> = {};
+  for (const [group, members] of Object.entries(DIAGNOSIS_GROUPS)) {
+    let score = 0;
+    for (const f of findings) {
+      if (members.includes(f.name)) score += f.probability;
+    }
+    if (score > 0) groupScores[group] = score;
+  }
+
+  if (Object.keys(groupScores).length === 0) {
+    return { primary: findings[0].name, differentials: findings.slice(1, 3).map(f => f.name) };
+  }
+
+  const sorted = Object.entries(groupScores).sort((a, b) => b[1] - a[1]);
+  const primary = sorted[0][0];
+  const differentials = sorted.slice(1, 3).filter(([, v]) => v > 0.3).map(([k]) => k);
+
+  return { primary, differentials };
+}
+
 export default function FindingsPanel({ result }: FindingsPanelProps) {
   const urgencyColors = URGENCY_COLORS[result.urgency_level] || URGENCY_COLORS.normal;
   const zs = result.zero_shot;
+  const { primary, differentials } = derivePrimaryDiagnosis(result.findings);
+
+  // Split findings: significant (≥20%) vs minor
+  const significantFindings = result.findings.filter(f => f.probability >= 0.2);
+  const minorFindings = result.findings.filter(f => f.probability < 0.2);
 
   return (
     <div className="space-y-4">
-      {/* Urgency Banner */}
-      <div className={`rounded-lg p-4 border ${urgencyColors.bg} ${urgencyColors.border}`}>
-        <div className="flex items-center justify-between">
-          <div>
+      {/* PRIMARY DIAGNOSIS — most prominent element */}
+      {result.findings.length > 0 && (
+        <div className={`rounded-lg p-4 border-2 ${
+          result.urgency_level === "critical" ? "border-red-500 bg-red-50" :
+          result.urgency_level === "urgent" ? "border-orange-500 bg-orange-50" :
+          "border-blue-500 bg-blue-50"
+        }`}>
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Primary Diagnosis</p>
+          <p className={`text-xl font-bold ${
+            result.urgency_level === "critical" ? "text-red-800" :
+            result.urgency_level === "urgent" ? "text-orange-800" :
+            "text-blue-800"
+          }`}>
+            {primary}
+          </p>
+          {differentials.length > 0 && (
+            <p className="text-sm text-gray-600 mt-1">
+              Differential: {differentials.join(", ")}
+            </p>
+          )}
+          <div className="flex items-center gap-3 mt-2">
             <span className={`text-xs font-bold px-2 py-1 rounded ${urgencyColors.badge}`}>
               {URGENCY_LABELS[result.urgency_level]}
             </span>
-            <p className="mt-1 text-sm text-gray-700">
-              {result.findings.length === 0
-                ? "No significant findings detected"
-                : `Top ${result.findings.length} differential diagnoses ranked by AI probability`}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-bold text-gray-900">
-              {(result.confidence_score * 100).toFixed(0)}%
-            </p>
-            <p className="text-xs text-gray-500">confidence</p>
+            <span className="text-sm font-bold text-gray-700">
+              {(result.confidence_score * 100).toFixed(0)}% confidence
+            </span>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* TorchXRayVision Findings — always shown */}
-      {result.findings.length > 0 && (
+      {/* No findings banner */}
+      {result.findings.length === 0 && (
+        <div className="rounded-lg p-4 border bg-green-50 border-green-200">
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Diagnosis</p>
+          <p className="text-xl font-bold text-green-800">No significant pathology detected</p>
+          <span className="text-xs font-bold px-2 py-1 rounded bg-green-100 text-green-700 mt-2 inline-block">
+            NORMAL
+          </span>
+        </div>
+      )}
+
+      {/* Significant Findings (≥20% probability) */}
+      {significantFindings.length > 0 && (
         <div>
           <h3 className="text-sm font-semibold text-gray-700 mb-2">
-            AI Differential Diagnosis — TorchXRayVision DenseNet
+            Key Findings — DenseNet AI Analysis
           </h3>
           <div className="space-y-2">
-            {result.findings.map((finding) => {
+            {significantFindings.map((finding) => {
               const fc = URGENCY_COLORS[finding.urgency] || URGENCY_COLORS.routine;
               return (
                 <div key={finding.name} className="flex items-center gap-3 p-3 rounded-lg bg-white border border-gray-100 shadow-sm">
@@ -83,6 +140,31 @@ export default function FindingsPanel({ result }: FindingsPanelProps) {
             })}
           </div>
         </div>
+      )}
+
+      {/* Minor Findings (collapsed) */}
+      {minorFindings.length > 0 && (
+        <details className="group">
+          <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none">
+            {minorFindings.length} additional findings below 20% ▶
+          </summary>
+          <div className="mt-2 space-y-1">
+            {minorFindings.map((finding) => (
+              <div key={finding.name} className="flex items-center gap-2 py-1">
+                <span className="text-xs text-gray-600 w-44 truncate">{finding.name}</span>
+                <div className="flex-1 h-1 bg-gray-100 rounded-full">
+                  <div
+                    className="h-full bg-gray-400 rounded-full"
+                    style={{ width: `${finding.probability * 100}%` }}
+                  />
+                </div>
+                <span className="text-xs text-gray-500 w-10 text-right">
+                  {(finding.probability * 100).toFixed(0)}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
 
       {/* Zero-Shot CLIP Findings */}

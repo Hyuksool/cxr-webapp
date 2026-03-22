@@ -235,131 +235,191 @@ async def analyze_cxr(cxr_image: UploadFile = File(...)):
         )
 
 
+# ─────────────────────────────────────────────
+# Clinical interpretation rules (no LLM dependency)
+# ─────────────────────────────────────────────
+
+# Maps pathology findings to clinical diagnosis descriptions
+CLINICAL_DESCRIPTIONS: dict[str, str] = {
+    "Atelectasis": "Partial collapse of lung parenchyma, likely subsegmental atelectasis. May represent post-obstructive changes or hypoventilation.",
+    "Cardiomegaly": "Cardiothoracic ratio exceeds normal limits, suggesting cardiomegaly. Consider echocardiography for further evaluation.",
+    "Consolidation": "Airspace consolidation identified, consistent with pneumonia, hemorrhage, or organizing process. Clinical correlation with symptoms and labs recommended.",
+    "Edema": "Pulmonary edema pattern identified. Findings may represent cardiogenic (CHF) or non-cardiogenic (ARDS) etiology.",
+    "Enlarged Cardiomediastinum": "Widened mediastinal silhouette. Consider aortic pathology, lymphadenopathy, or mass lesion. CT recommended if clinically indicated.",
+    "Fracture": "Osseous abnormality suggesting fracture. Clinical correlation with trauma history recommended.",
+    "Lung Lesion": "Focal parenchymal lesion identified. Differential includes neoplasm, granuloma, or infectious focus. Follow-up imaging or CT recommended.",
+    "Lung Opacity": "Pulmonary opacity identified. Differential includes infectious process, atelectasis, or mass. Correlate with clinical presentation.",
+    "Pleural Effusion": "Pleural fluid collection identified. Consider infectious, malignant, or cardiac etiology.",
+    "Pleural Other": "Pleural abnormality identified. May represent thickening, calcification, or other pleural pathology.",
+    "Pneumonia": "Findings consistent with pneumonia. Recommend clinical correlation with symptoms, labs (CBC, CRP), and consideration of antibiotic therapy.",
+    "Pneumothorax": "Pneumothorax identified. Assess clinical stability and consider chest tube placement if symptomatic or tension physiology suspected.",
+    "Support Devices": "Medical support devices identified (e.g., central line, ETT, NG tube). Verify appropriate positioning.",
+    "Infiltration": "Pulmonary infiltrate identified. Differential includes infection, inflammation, or hemorrhage.",
+    "Emphysema": "Hyperinflated lungs with findings suggestive of emphysema/COPD.",
+    "Fibrosis": "Interstitial changes suggestive of pulmonary fibrosis. Consider HRCT for further characterization.",
+    "Hernia": "Diaphragmatic hernia suspected. Consider CT for confirmation and surgical consultation.",
+    "Mass": "Pulmonary mass lesion identified. Urgent CT and potential tissue sampling recommended to evaluate for malignancy.",
+    "Nodule": "Pulmonary nodule identified. Follow Fleischner Society guidelines for management based on size and risk factors.",
+    "Effusion": "Pleural effusion identified. Consider thoracentesis if clinically indicated.",
+}
+
+URGENCY_RECOMMENDATIONS: dict[str, str] = {
+    "critical": "URGENT: Immediate clinical assessment required. Consider emergent intervention.",
+    "urgent": "Prompt clinical evaluation recommended. Correlate with patient symptoms and consider further imaging.",
+    "routine": "Routine follow-up recommended. Clinical correlation advised.",
+    "normal": "No acute findings requiring immediate intervention.",
+    "info": "Incidental finding noted. Clinical correlation as needed.",
+}
+
+# Pathology groupings for synthesizing primary diagnosis
+DIAGNOSIS_GROUPS: dict[str, list[str]] = {
+    "Pneumonia / Infection": ["Pneumonia", "Consolidation", "Infiltration"],
+    "Pulmonary Edema / CHF": ["Edema", "Cardiomegaly", "Pleural Effusion", "Effusion"],
+    "Pneumothorax": ["Pneumothorax"],
+    "Mass / Nodule": ["Mass", "Nodule", "Lung Lesion"],
+    "Interstitial Disease": ["Fibrosis", "Emphysema"],
+    "Structural": ["Atelectasis", "Enlarged Cardiomediastinum", "Hernia"],
+}
+
+
+def _synthesize_primary_diagnosis(findings: list[dict]) -> str:
+    """Derive primary clinical diagnosis from pathology findings."""
+    if not findings:
+        return "No significant pathology detected. Normal study."
+
+    # Score each diagnostic group
+    group_scores: dict[str, float] = {}
+    for group_name, members in DIAGNOSIS_GROUPS.items():
+        score = 0.0
+        for f in findings:
+            if f.get("name") in members:
+                score += f.get("probability", 0)
+        if score > 0:
+            group_scores[group_name] = score
+
+    if not group_scores:
+        top = findings[0]
+        return f"{top['name']} (probability: {top['probability']*100:.0f}%)"
+
+    # Primary = highest aggregate score
+    primary = max(group_scores, key=group_scores.get)  # type: ignore[arg-type]
+    primary_prob = group_scores[primary]
+
+    # Secondary diagnoses
+    secondaries = sorted(
+        [(k, v) for k, v in group_scores.items() if k != primary and v > 0.3],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+
+    result = f"Primary: {primary}"
+    if secondaries:
+        sec_names = [s[0] for s in secondaries[:2]]
+        result += f"\nDifferential: {', '.join(sec_names)}"
+
+    return result
+
+
+def _generate_rule_based_report(req: ReportRequest) -> dict:
+    """Generate structured radiology report using clinical rules (no LLM)."""
+    findings = req.findings or []
+
+    # Sort by probability descending
+    sorted_findings = sorted(findings, key=lambda f: f.get("probability", 0), reverse=True)
+
+    # Primary diagnosis synthesis
+    primary_dx = _synthesize_primary_diagnosis(sorted_findings)
+
+    # Build FINDINGS section
+    findings_lines = []
+    for f in sorted_findings:
+        name = f.get("name", "Unknown")
+        prob = f.get("probability", 0)
+        desc = CLINICAL_DESCRIPTIONS.get(name, f"{name} identified.")
+        if prob >= 0.5:
+            findings_lines.append(f"- {name} ({prob*100:.0f}%): {desc}")
+        elif prob >= 0.2:
+            findings_lines.append(f"- {name} ({prob*100:.0f}%): Possible {name.lower()}. {desc}")
+
+    if not findings_lines:
+        findings_text = "No significant abnormalities identified."
+    else:
+        findings_text = "\n".join(findings_lines)
+
+    # Build IMPRESSION
+    critical_findings = [f for f in sorted_findings if f.get("urgency") == "critical" and f.get("probability", 0) >= 0.3]
+    urgent_findings = [f for f in sorted_findings if f.get("urgency") == "urgent" and f.get("probability", 0) >= 0.3]
+
+    impression_parts = []
+    if critical_findings:
+        names = ", ".join(f.get("name", "") for f in critical_findings)
+        impression_parts.append(f"CRITICAL: {names} — immediate evaluation required.")
+    if urgent_findings:
+        names = ", ".join(f.get("name", "") for f in urgent_findings)
+        impression_parts.append(f"URGENT: {names} — prompt clinical correlation recommended.")
+
+    if not impression_parts:
+        top3 = sorted_findings[:3]
+        if top3:
+            names = ", ".join(f"{f.get('name', '')} ({f.get('probability', 0)*100:.0f}%)" for f in top3)
+            impression_parts.append(f"Top findings: {names}. Clinical correlation advised.")
+        else:
+            impression_parts.append("No significant abnormalities.")
+
+    impression_text = " ".join(impression_parts)
+
+    # Recommendations
+    rec = URGENCY_RECOMMENDATIONS.get(req.urgency_level, URGENCY_RECOMMENDATIONS["routine"])
+
+    sections = {
+        "PRIMARY DIAGNOSIS": primary_dx,
+        "CLINICAL INDICATION": "AI-assisted chest X-ray screening and differential diagnosis.",
+        "TECHNIQUE": "Standard PA/AP chest radiograph analyzed by TorchXRayVision DenseNet (18-pathology model) with CLIP zero-shot classification.",
+        "FINDINGS": findings_text,
+        "IMPRESSION": impression_text,
+        "RECOMMENDATIONS": rec,
+    }
+
+    report_text = "\n\n".join(f"{k}:\n{v}" for k, v in sections.items())
+
+    return {
+        "report": report_text,
+        "sections": sections,
+        "urgency_level": req.urgency_level,
+        "model": "rule-based-clinical-v1",
+        "primary_diagnosis": primary_dx,
+    }
+
+
 @app.post("/report", response_model=ReportResponse)
 async def generate_report(req: ReportRequest):
     """
-    Generate radiology report using Claude based on CXR findings.
+    Generate radiology report using rule-based clinical interpretation.
+    Falls back to Claude LLM if available for enhanced narrative.
     """
+    # Always generate rule-based report first (instant, no dependencies)
+    rule_report = _generate_rule_based_report(req)
+
+    # Try Claude LLM for enhanced narrative (optional overlay)
     try:
-        # Build findings summary for Claude
-        if not req.findings:
-            findings_text = "No significant findings detected."
-        else:
-            findings_lines = []
-            for f in req.findings:
-                findings_lines.append(
-                    f"- {f['name']}: {f['probability']*100:.1f}% probability ({f['urgency']} urgency)"
-                )
-            findings_text = "\n".join(findings_lines)
+        findings_text = "\n".join(
+            f"- {f['name']}: {f['probability']*100:.1f}% ({f['urgency']})"
+            for f in (req.findings or [])
+        ) or "No findings."
 
-        prompt = f"""You are an expert radiologist. Generate a structured chest X-ray radiology report based on AI analysis results.
+        prompt = f"""You are an expert radiologist. Write a concise clinical impression (3-5 sentences) for this CXR:
 
-AI Analysis Results:
-Urgency Level: {req.urgency_level.upper()}
-Overall Confidence: {req.confidence_score*100:.1f}%
-No Finding Probability: {req.no_finding_probability*100:.1f}%
+Findings: {findings_text}
+Urgency: {req.urgency_level}
+Confidence: {req.confidence_score*100:.0f}%
 
-Detected Findings:
-{findings_text}
+Write ONLY the clinical impression — no headers, no sections. Be specific and actionable."""
 
-Generate a radiology report with these sections:
-1. CLINICAL INDICATION: Brief indication for CXR
-2. TECHNIQUE: Standard PA/AP chest radiograph
-3. FINDINGS: Describe each finding professionally
-4. IMPRESSION: Concise summary (most important 1-3 points)
-5. RECOMMENDATIONS: Clinical action items based on urgency
+        claude_text = await _call_claude(prompt)
+        if claude_text and claude_text.strip():
+            rule_report["sections"]["CLINICAL IMPRESSION (AI)"] = claude_text.strip()
+            rule_report["model"] = "rule-based-clinical-v1 + claude-enhanced"
+    except Exception:
+        pass  # Rule-based report is sufficient
 
-Important:
-- Write as a professional radiologist
-- Use appropriate medical terminology
-- Flag critical/urgent findings prominently
-- Be concise but complete
-- If no findings, state clearly normal study
-- This is AI-assisted, not a replacement for clinical judgment"""
-
-        report_text = await _call_claude(prompt)
-
-        # Parse sections
-        sections = {}
-        current_section = None
-        current_lines = []
-
-        for line in report_text.split("\n"):
-            stripped = line.strip()
-            if stripped.startswith(("1.", "2.", "3.", "4.", "5.")):
-                if current_section and current_lines:
-                    sections[current_section] = "\n".join(current_lines).strip()
-                # Extract section name
-                parts = stripped.split(":", 1)
-                if len(parts) == 2:
-                    current_section = parts[0].split(".", 1)[1].strip()
-                    first_content = parts[1].strip()
-                    current_lines = [first_content] if first_content else []
-                else:
-                    current_section = stripped
-                    current_lines = []
-            elif current_section is not None:
-                current_lines.append(line)
-
-        if current_section and current_lines:
-            sections[current_section] = "\n".join(current_lines).strip()
-
-        return ReportResponse(
-            success=True,
-            data={
-                "report": report_text,
-                "sections": sections,
-                "urgency_level": req.urgency_level,
-                "model": "claude-agent-sdk/sonnet",
-            },
-        )
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        # Always return success=True with fallback report so UI can display findings.
-        # Never return success=False from this endpoint.
-        _err_str = f"{type(e).__name__}: {e}"
-        try:
-            findings_text = "\n".join(
-                f"  - {f.get('name', 'Unknown')}: {f.get('probability', 0)*100:.1f}% probability ({f.get('urgency', 'unknown')} urgency)"
-                for f in (req.findings or [])
-            ) or "  No significant findings detected."
-            findings_summary = "\n".join(
-                f"{f.get('name', 'Unknown')}: {f.get('probability', 0)*100:.1f}% ({f.get('urgency', 'unknown')})"
-                for f in (req.findings or [])
-            ) or "No significant findings."
-        except Exception:
-            findings_text = "  Unable to parse findings."
-            findings_summary = "Unable to parse findings."
-
-        fallback_text = "\n".join([
-            "CLINICAL INDICATION: AI-assisted chest X-ray analysis.",
-            "",
-            "TECHNIQUE: Standard chest radiograph (AI analysis only).",
-            "",
-            "FINDINGS:",
-            findings_text,
-            "",
-            f"IMPRESSION: {req.urgency_level.upper()} urgency. Confidence: {req.confidence_score*100:.1f}%.",
-            "",
-            "RECOMMENDATIONS: Clinical correlation required. AI narrative report unavailable — consult a radiologist.",
-            "",
-            f"NOTE: Automated report generation failed ({_err_str}). "
-            "This is a fallback summary based on raw AI findings only.",
-        ])
-        return ReportResponse(
-            success=True,
-            data={
-                "report": fallback_text,
-                "sections": {
-                    "CLINICAL INDICATION": "AI-assisted chest X-ray analysis.",
-                    "FINDINGS": findings_summary,
-                    "IMPRESSION": f"{req.urgency_level.upper()} urgency. Confidence: {req.confidence_score*100:.1f}%.",
-                    "RECOMMENDATIONS": "Clinical correlation required. Consult a radiologist.",
-                },
-                "urgency_level": req.urgency_level,
-                "model": "fallback (Claude CLI unavailable)",
-                "error": _err_str,
-            },
-        )
+    return ReportResponse(success=True, data=rule_report)
