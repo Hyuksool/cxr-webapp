@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Allow up to 5 minutes for model inference (Railway CPU cold start)
+export const maxDuration = 300;
+
 const BACKEND_URL = process.env.CXR_BACKEND_URL || "http://localhost:8200";
 
 export async function POST(request: NextRequest) {
@@ -21,7 +24,7 @@ export async function POST(request: NextRequest) {
     const response = await fetch(`${BACKEND_URL}/analyze`, {
       method: "POST",
       body: backendForm,
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(300_000), // 5 min — Railway CPU cold start can be slow
     });
 
     const data = await response.json();
