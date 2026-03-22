@@ -2,9 +2,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "framework": "nextjs",
-  "env": {
-    "CXR_BACKEND_URL": "@cxr_backend_url"
-  },
+  "env": {},
   "functions": {
     "app/api/analyze-cxr/route.ts": {
       "maxDuration": 120
