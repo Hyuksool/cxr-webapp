@@ -105,6 +105,60 @@ class ReportResponse(BaseModel):
 
 
 # ─────────────────────────────────────────────
+# Claude helpers
+# ─────────────────────────────────────────────
+
+async def _call_claude(prompt: str) -> str:
+    """Call Claude for text generation.
+
+    Tries claude_agent_sdk first (Claude CLI), then falls back to
+    the anthropic Python SDK when the CLI subprocess fails or isn't available.
+    Both approaches require ANTHROPIC_API_KEY.
+    """
+    # --- Try claude_agent_sdk (Claude Code CLI) ---
+    try:
+        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
+
+        def _extract_text(value) -> str:
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                return "".join(_extract_text(item) for item in value)
+            if isinstance(value, dict):
+                return _extract_text(value.get("text", ""))
+            if hasattr(value, "text"):
+                return _extract_text(value.text)
+            return str(value) if value else ""
+
+        result = ""
+        async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
+            if hasattr(msg, "content"):
+                result += _extract_text(msg.content)
+        if result.strip():
+            return result
+        raise RuntimeError("claude_agent_sdk returned empty response")
+    except Exception as sdk_err:
+        print(f"claude_agent_sdk failed ({sdk_err}), falling back to anthropic SDK")
+
+    # --- Fallback: anthropic Python SDK ---
+    import anthropic
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set and claude_agent_sdk also failed")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    message = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        ),
+    )
+    return message.content[0].text
+
+
+# ─────────────────────────────────────────────
 # Startup
 # ─────────────────────────────────────────────
 
@@ -225,24 +279,7 @@ Important:
 - If no findings, state clearly normal study
 - This is AI-assisted, not a replacement for clinical judgment"""
 
-        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
-
-        def _extract_text(value) -> str:
-            """Recursively extract text from SDK response values."""
-            if isinstance(value, str):
-                return value
-            if isinstance(value, list):
-                return "".join(_extract_text(item) for item in value)
-            if isinstance(value, dict):
-                return _extract_text(value.get("text", ""))
-            if hasattr(value, "text"):
-                return _extract_text(value.text)
-            return str(value) if value else ""
-
-        report_text = ""
-        async for msg in claude_query(prompt=prompt, options=ClaudeAgentOptions(model="sonnet")):
-            if hasattr(msg, "content"):
-                report_text += _extract_text(msg.content)
+        report_text = await _call_claude(prompt)
 
         # Parse sections
         sections = {}
