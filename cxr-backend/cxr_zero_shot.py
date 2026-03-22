@@ -165,6 +165,9 @@ def _precompute_text_embeddings() -> dict:
                 truncation=True,
             ).to(_DEVICE)
             text_feats = _CLIP_MODEL.get_text_features(**inputs)
+            # Newer transformers may return ModelOutput instead of tensor
+            if not isinstance(text_feats, torch.Tensor):
+                text_feats = text_feats.pooler_output if hasattr(text_feats, "pooler_output") else text_feats[0]
             # Average over prompt variants
             text_feats = text_feats.mean(dim=0, keepdim=True)
             text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
@@ -201,6 +204,8 @@ def classify_zero_shot(image_bytes: bytes) -> dict:
                 return_tensors="pt",
             ).to(_DEVICE)
             image_feats = _CLIP_MODEL.get_image_features(**inputs)
+            if not isinstance(image_feats, torch.Tensor):
+                image_feats = image_feats.pooler_output if hasattr(image_feats, "pooler_output") else image_feats[0]
             image_feats = image_feats / image_feats.norm(dim=-1, keepdim=True)
 
         # Compute similarity with each pathology
