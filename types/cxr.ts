@@ -17,6 +17,18 @@ export interface ZeroShotResult {
   model: string;
 }
 
+export interface ClinicalDiagnosis {
+  id: number;
+  name: string;
+  category: string;
+  tier: number;
+  tier_label: string;
+  confidence: number;
+  description: string;
+  icd10_codes: string[];
+  triggering_pathologies: string[];
+}
+
 export interface CXRAnalysisResult {
   pathologies: PathologyResult[];
   findings: PathologyResult[];
@@ -26,6 +38,7 @@ export interface CXRAnalysisResult {
   confidence_score: number;
   no_finding_probability: number;
   zero_shot: ZeroShotResult | null;
+  clinical_diagnoses: ClinicalDiagnosis[];
 }
 
 export interface ReportResult {

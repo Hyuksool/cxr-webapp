@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from cxr_classifier import classify_cxr_image, preload_cxr_model
 from cxr_zero_shot import classify_zero_shot, preload_zero_shot_model
+from cxr_clinical_mapper import map_cxr_to_clinical
 
 
 app = FastAPI(
@@ -83,6 +84,7 @@ class CXRClassificationResult(BaseModel):
     confidence_score: float
     no_finding_probability: float
     zero_shot: ZeroShotResult | None = None
+    clinical_diagnoses: list[dict] = []
 
 
 class CXRAnalysisResponse(BaseModel):
@@ -96,6 +98,7 @@ class ReportRequest(BaseModel):
     urgency_level: str
     confidence_score: float
     no_finding_probability: float
+    clinical_diagnoses: list[dict] = []
 
 
 class ReportResponse(BaseModel):
@@ -217,11 +220,16 @@ async def analyze_cxr(cxr_image: UploadFile = File(...)):
             loop.run_in_executor(None, classify_zero_shot, image_bytes),
         )
 
+        # Map pathology probabilities to clinical diagnoses
+        pathology_probs = {p["name"]: p["probability"] for p in result["pathologies"]}
+        clinical_diagnoses = map_cxr_to_clinical(pathology_probs)
+
         return CXRAnalysisResponse(
             success=True,
             data=CXRClassificationResult(
                 **result,
                 zero_shot=ZeroShotResult(**zs_result),
+                clinical_diagnoses=clinical_diagnoses,
             ),
         )
     except RuntimeError as e:
@@ -379,6 +387,18 @@ def _generate_rule_based_report(req: ReportRequest) -> dict:
         "IMPRESSION": impression_text,
         "RECOMMENDATIONS": rec,
     }
+
+    # Add Clinical Diagnoses section if available
+    if req.clinical_diagnoses:
+        dx_lines = []
+        for dx in req.clinical_diagnoses:
+            tier = dx.get("tier_label", "")
+            name = dx.get("name", "")
+            conf = dx.get("confidence", 0)
+            icd = ", ".join(dx.get("icd10_codes", []))
+            desc = dx.get("description", "")
+            dx_lines.append(f"- [{tier}] {name} ({conf*100:.0f}%) [ICD-10: {icd}]\n  {desc}")
+        sections["CLINICAL DIAGNOSES"] = "\n".join(dx_lines)
 
     report_text = "\n\n".join(f"{k}:\n{v}" for k, v in sections.items())
 
