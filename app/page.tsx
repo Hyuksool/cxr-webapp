@@ -198,7 +198,7 @@ export default function Home() {
             )}
 
             {/* After analysis: Image + GradCAM moves below findings on mobile (order-last on mobile) */}
-            {imagePreview && analysis && !isLoading && (
+            {imagePreview && analysis && (
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 order-last lg:order-none">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm font-semibold text-gray-700">Image & GradCAM</h2>
