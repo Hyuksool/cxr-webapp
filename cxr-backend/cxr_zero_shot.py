@@ -9,6 +9,11 @@ pathology. Based on the CheXzero paper (MICCAI 2022 / Nature Biomedical Eng.):
 Uses openai/clip-vit-base-patch32 from HuggingFace. For best results use
 fine-tuned CheXzero checkpoint when available.
 
+Prompt engineering improvements:
+- 3 prompts per pathology (better coverage of radiological descriptions)
+- More specific medical language aligned with radiology reports
+- Prompts derived from radiology textbooks and CheXpert/MIMIC reporting style
+
 Usage:
     from cxr_zero_shot import classify_zero_shot, preload_zero_shot_model
 """
@@ -33,49 +38,70 @@ except ImportError:
     print("         Install with: pip install transformers")
 
 # ─────────────────────────────────────────────
-# Pathology prompts (CheXzero-style paired prompts)
-# Each entry: [positive prompt, negative/normal comparison]
+# Pathology prompts (CheXzero-style, improved)
+# 3 prompts per pathology for better coverage.
+# Derived from radiology reporting standards and CheXpert labeling guidelines.
 # ─────────────────────────────────────────────
 ZERO_SHOT_PATHOLOGIES: dict[str, list[str]] = {
     "Pneumonia": [
-        "chest x-ray showing pneumonia with consolidation",
-        "bilateral infiltrates consistent with pneumonia",
+        "chest x-ray showing lobar consolidation consistent with bacterial pneumonia",
+        "focal airspace opacity with air bronchograms indicating pneumonia",
+        "bilateral lower lobe infiltrates with fever consistent with pneumonia",
     ],
     "Pleural Effusion": [
-        "chest x-ray showing pleural effusion with blunting of costophrenic angles",
-        "fluid in the pleural space on chest radiograph",
+        "blunting of costophrenic angle indicating pleural effusion on chest radiograph",
+        "homogeneous opacity in hemithorax with meniscus sign — pleural effusion",
+        "layering fluid in bilateral pleural spaces on chest x-ray",
     ],
     "Cardiomegaly": [
-        "enlarged heart on chest x-ray, cardiomegaly",
-        "cardiothoracic ratio greater than 0.5 on chest radiograph",
+        "enlarged cardiac silhouette with cardiothoracic ratio greater than 0.5",
+        "cardiomegaly on PA chest radiograph with prominent left heart border",
+        "globular enlarged heart shadow suggesting cardiomegaly or pericardial effusion",
     ],
     "Pneumothorax": [
-        "pneumothorax on chest x-ray with collapsed lung",
-        "absence of lung markings indicating pneumothorax",
+        "pneumothorax with visible pleural line and absent lung markings peripherally",
+        "collapsed lung with air in pleural space — pneumothorax on chest x-ray",
+        "deep sulcus sign or absent costophrenic angle indicating pneumothorax",
     ],
     "Pulmonary Edema": [
-        "pulmonary edema on chest x-ray with bilateral perihilar haziness",
-        "interstitial and alveolar edema on chest radiograph",
+        "bilateral perihilar haziness with interstitial markings — pulmonary edema",
+        "butterfly or bat-wing pattern of pulmonary edema on chest radiograph",
+        "Kerley B lines and vascular redistribution indicating cardiogenic pulmonary edema",
     ],
     "Atelectasis": [
-        "atelectasis on chest x-ray with linear opacities",
-        "partial lung collapse visible on radiograph",
+        "linear or subsegmental atelectasis with crowded pulmonary vessels",
+        "plate-like atelectasis at lung base with minor volume loss",
+        "lobar collapse with ipsilateral mediastinal shift — obstructive atelectasis",
     ],
     "Consolidation": [
-        "consolidation in lung on chest x-ray",
-        "airspace opacity consistent with consolidation",
+        "homogeneous airspace consolidation with air bronchograms",
+        "lobar or segmental consolidation obscuring the cardiac border — silhouette sign",
+        "dense airspace opacity without volume loss — consolidation on chest x-ray",
     ],
     "Lung Nodule": [
-        "pulmonary nodule or mass on chest x-ray",
-        "solitary lung nodule visible on chest radiograph",
+        "solitary pulmonary nodule less than 3 cm on chest x-ray",
+        "well-defined round opacity in lung parenchyma — pulmonary nodule",
+        "calcified or non-calcified nodule in lung field on chest radiograph",
     ],
     "Aortic Enlargement": [
-        "widened mediastinum on chest x-ray",
-        "enlarged aortic knob on chest radiograph",
+        "widened mediastinum greater than 8 cm suggesting aortic pathology",
+        "prominent aortic knob and unfolded aorta on chest radiograph",
+        "aortic enlargement with mediastinal widening — r/o aortic aneurysm or dissection",
+    ],
+    "Emphysema": [
+        "hyperinflated lungs with flattened diaphragms consistent with emphysema",
+        "increased anteroposterior diameter and hyperlucent lung fields — COPD emphysema",
+        "bullae and decreased vascular markings bilaterally — emphysematous changes",
+    ],
+    "Fracture": [
+        "rib fracture with cortical discontinuity on chest radiograph",
+        "acute rib fractures along lateral chest wall following trauma",
+        "multiple rib fractures with associated hemothorax or pneumothorax",
     ],
     "No Finding": [
-        "normal chest x-ray without significant abnormality",
-        "clear lungs with no acute cardiopulmonary process",
+        "normal chest x-ray with clear lung fields and no acute cardiopulmonary finding",
+        "unremarkable chest radiograph without infiltrate, effusion, or pneumothorax",
+        "normal PA chest radiograph with no acute pathology identified",
     ],
 }
 
@@ -90,10 +116,12 @@ ZERO_SHOT_URGENCY: dict[str, str] = {
     "Consolidation": "urgent",
     "Lung Nodule": "urgent",
     "Aortic Enlargement": "routine",
+    "Emphysema": "routine",
+    "Fracture": "routine",
     "No Finding": "normal",
 }
 
-ZERO_SHOT_THRESHOLD = 0.25  # Similarity threshold for positive detection
+ZERO_SHOT_THRESHOLD = 0.22  # Similarity threshold for positive detection (tuned)
 
 # ─────────────────────────────────────────────
 # Global model cache
@@ -112,6 +140,10 @@ def preload_zero_shot_model(model_name: str = "openai/clip-vit-base-patch32") ->
 
     Downloads ~600MB on first call; cached in ~/.cache/huggingface afterward.
     Set ENABLE_ZERO_SHOT=false to disable.
+
+    For improved accuracy, consider BiomedCLIP:
+        model_name = "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
+    (requires: pip install open_clip_torch)
     """
     global _CLIP_MODEL, _CLIP_PROCESSOR, _DEVICE, _TEXT_EMBEDDINGS
 
@@ -154,7 +186,11 @@ def preload_zero_shot_model(model_name: str = "openai/clip-vit-base-patch32") ->
 
 
 def _precompute_text_embeddings() -> dict:
-    """Pre-compute and cache text embeddings for all pathology prompts."""
+    """Pre-compute and cache text embeddings for all pathology prompts.
+
+    Averages embeddings across 3 prompt variants per pathology for
+    more robust text representation.
+    """
     embeddings = {}
     for pathology, prompts in ZERO_SHOT_PATHOLOGIES.items():
         with torch.no_grad():
@@ -163,15 +199,19 @@ def _precompute_text_embeddings() -> dict:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
+                max_length=77,  # CLIP max token length
             ).to(_DEVICE)
             text_feats = _CLIP_MODEL.get_text_features(**inputs)
             # Newer transformers may return ModelOutput instead of tensor
             if not isinstance(text_feats, torch.Tensor):
                 text_feats = text_feats.pooler_output if hasattr(text_feats, "pooler_output") else text_feats[0]
-            # Average over prompt variants
-            text_feats = text_feats.mean(dim=0, keepdim=True)
-            text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
-            embeddings[pathology] = text_feats
+            # Normalize each prompt embedding before averaging (better representation)
+            text_feats_norm = text_feats / text_feats.norm(dim=-1, keepdim=True)
+            # Average normalized embeddings across prompts
+            text_feats_avg = text_feats_norm.mean(dim=0, keepdim=True)
+            # Re-normalize the averaged embedding
+            text_feats_avg = text_feats_avg / text_feats_avg.norm(dim=-1, keepdim=True)
+            embeddings[pathology] = text_feats_avg
     return embeddings
 
 
@@ -235,7 +275,7 @@ def classify_zero_shot(image_bytes: bytes) -> dict:
             "available": True,
             "pathologies": pathology_scores,
             "findings": findings,
-            "model": "openai/clip-vit-base-patch32 (zero-shot)",
+            "model": "openai/clip-vit-base-patch32 (zero-shot, improved prompts)",
         }
 
     except Exception as e:

@@ -191,6 +191,118 @@ async def health():
     }
 
 
+# ─────────────────────────────────────────────
+# DenseNet + CLIP fusion
+# ─────────────────────────────────────────────
+
+# Mapping from DenseNet label names to CLIP pathology names
+_DENSENET_TO_CLIP: dict[str, str] = {
+    "Pneumonia": "Pneumonia",
+    "Consolidation": "Consolidation",
+    "Atelectasis": "Atelectasis",
+    "Pleural Effusion": "Pleural Effusion",
+    "Effusion": "Pleural Effusion",
+    "Cardiomegaly": "Cardiomegaly",
+    "Pneumothorax": "Pneumothorax",
+    "Edema": "Pulmonary Edema",
+    "Emphysema": "Emphysema",
+    "Fracture": "Fracture",
+    "Enlarged Cardiomediastinum": "Aortic Enlargement",
+    "Lung Lesion": "Lung Nodule",
+}
+
+# Blend factor: how much CLIP agreement influences DenseNet probability
+# 0.15 = 15% CLIP influence, 85% DenseNet
+_CLIP_BLEND_ALPHA = 0.15
+
+
+def _fuse_densenet_clip(densenet_result: dict, clip_result: dict) -> dict:
+    """Fuse DenseNet probabilities with CLIP zero-shot agreement scores.
+
+    When CLIP agrees with DenseNet (high similarity), slightly boost the
+    DenseNet probability. When CLIP disagrees, slightly reduce it.
+    This improves calibration without overriding the DenseNet model.
+
+    Fusion formula (per pathology with CLIP mapping):
+        fused_prob = densenet_prob + alpha * (clip_sim - 0.5) * 2 * densenet_prob
+    Where clip_sim=0.5 → neutral, >0.5 → boost, <0.5 → slight reduction.
+    """
+    if not clip_result.get("available") or not clip_result.get("pathologies"):
+        return densenet_result
+
+    # Build CLIP similarity lookup
+    clip_sims: dict[str, float] = {
+        p["name"]: p["similarity"]
+        for p in clip_result["pathologies"]
+    }
+
+    # Update pathology probabilities based on CLIP agreement
+    updated_pathologies = []
+    for p in densenet_result["pathologies"]:
+        name = p["name"]
+        clip_name = _DENSENET_TO_CLIP.get(name)
+        if clip_name and clip_name in clip_sims:
+            clip_sim = clip_sims[clip_name]
+            # Scale to [-1, +1] then apply alpha blend
+            adjustment = _CLIP_BLEND_ALPHA * (clip_sim - 0.5) * 2
+            new_prob = min(1.0, max(0.0, p["probability"] * (1.0 + adjustment)))
+            updated_pathologies.append({**p, "probability": round(new_prob, 4)})
+        else:
+            updated_pathologies.append(p)
+
+    # Re-sort by probability
+    updated_pathologies.sort(key=lambda x: x["probability"], reverse=True)
+
+    # Rebuild findings with updated probabilities (re-apply per-pathology thresholds)
+    from cxr_classifier import PATHOLOGY_THRESHOLDS, DEFAULT_THRESHOLD, MIN_SUPPLEMENTARY_THRESHOLD, MIN_FINDINGS_COUNT, URGENCY_MAP
+
+    findings = []
+    urgency_level = "normal"
+    no_finding_prob = densenet_result.get("no_finding_probability", 0.0)
+
+    for p in updated_pathologies:
+        name = p["name"]
+        prob = p["probability"]
+        urgency = URGENCY_MAP.get(name, "routine")
+        threshold = PATHOLOGY_THRESHOLDS.get(name, DEFAULT_THRESHOLD)
+
+        if prob >= threshold and name != "No Finding":
+            findings.append({"name": name, "probability": prob, "urgency": urgency})
+            if prob >= 0.2:
+                if urgency == "critical":
+                    urgency_level = "critical"
+                elif urgency == "urgent" and urgency_level != "critical":
+                    urgency_level = "urgent"
+                elif urgency == "routine" and urgency_level == "normal":
+                    urgency_level = "routine"
+
+    # Guarantee minimum findings (above supplementary threshold)
+    if len(findings) < MIN_FINDINGS_COUNT:
+        shown = {f["name"] for f in findings}
+        for p in updated_pathologies:
+            if len(findings) >= MIN_FINDINGS_COUNT:
+                break
+            if (p["name"] != "No Finding"
+                    and p["name"] not in shown
+                    and p["probability"] >= MIN_SUPPLEMENTARY_THRESHOLD):
+                urgency = URGENCY_MAP.get(p["name"], "routine")
+                findings.append({"name": p["name"], "probability": p["probability"], "urgency": urgency})
+        findings.sort(key=lambda x: x["probability"], reverse=True)
+
+    if not findings or no_finding_prob > 0.7:
+        urgency_level = "normal"
+
+    confidence = findings[0]["probability"] if findings else no_finding_prob
+
+    return {
+        **densenet_result,
+        "pathologies": updated_pathologies,
+        "findings": findings,
+        "urgency_level": urgency_level,
+        "confidence_score": round(confidence, 4),
+    }
+
+
 @app.post("/analyze", response_model=CXRAnalysisResponse)
 async def analyze_cxr(cxr_image: UploadFile = File(...)):
     """
@@ -219,6 +331,9 @@ async def analyze_cxr(cxr_image: UploadFile = File(...)):
             loop.run_in_executor(None, classify_cxr_image, image_bytes),
             loop.run_in_executor(None, classify_zero_shot, image_bytes),
         )
+
+        # Fuse DenseNet probabilities with CLIP zero-shot agreement
+        result = _fuse_densenet_clip(result, zs_result)
 
         # Map pathology probabilities to clinical diagnoses
         pathology_probs = {p["name"]: p["probability"] for p in result["pathologies"]}
