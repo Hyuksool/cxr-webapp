@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import type { CXRAnalysisResult, ReportResult } from "@/types/cxr";
 import UploadZone from "@/components/UploadZone";
 import FindingsPanel from "@/components/FindingsPanel";
+import ClinicalDiagnosisPanel from "@/components/ClinicalDiagnosisPanel";
 import ReportPanel from "@/components/ReportPanel";
 import LoadingSpinner from "@/components/LoadingSpinner";
 
@@ -70,6 +71,7 @@ export default function Home() {
             urgency_level: analysisData.urgency_level,
             confidence_score: analysisData.confidence_score,
             no_finding_probability: analysisData.no_finding_probability,
+            clinical_diagnoses: analysisData.clinical_diagnoses || [],
           }),
           signal: AbortSignal.timeout(300_000), // 5 min — Claude CLI can take 90s
         });
@@ -126,9 +128,24 @@ export default function Home() {
               <p className="text-xs text-gray-500">AI-Powered Chest X-Ray Interpretation</p>
             </div>
           </div>
-          <div className="text-right text-xs text-gray-400">
-            <p>TorchXRayVision DenseNet + CLIP Zero-Shot</p>
-            <p>18-pathology + zero-shot classification</p>
+          <div className="flex items-center gap-4">
+            {(analysis || imageFile) && (
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M12 4v16m8-8H4"
+                  />
+                </svg>
+                New Analysis
+              </button>
+            )}
+            <div className="text-right text-xs text-gray-400 hidden sm:block">
+              <p>TorchXRayVision DenseNet + CLIP Zero-Shot</p>
+              <p>18-pathology + zero-shot classification</p>
+            </div>
           </div>
         </div>
       </header>
@@ -241,7 +258,14 @@ export default function Home() {
               </div>
             )}
 
-            {/* Findings — FIRST thing shown after analysis */}
+            {/* Clinical Diagnoses — tier-based clinical interpretation */}
+            {analysis && !isLoading && analysis.clinical_diagnoses?.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+                <ClinicalDiagnosisPanel diagnoses={analysis.clinical_diagnoses} />
+              </div>
+            )}
+
+            {/* Findings — DenseNet AI pathology scores */}
             {analysis && !isLoading && (
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
                 <FindingsPanel result={analysis} />
