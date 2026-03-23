@@ -210,23 +210,28 @@ export default function Home() {
                     {analysis.urgency_level.toUpperCase()}
                   </span>
                 </div>
-                {analysis.heatmap_base64 ? (
-                  <div className="space-y-2">
-                    <img
-                      src={`data:image/png;base64,${analysis.heatmap_base64}`}
-                      alt="CXR with GradCAM heatmap"
-                      className="w-full rounded-lg object-contain max-h-80"
-                    />
-                    <p className="text-xs text-gray-400 text-center">
-                      GradCAM heatmap — highlighted region drove AI decision
-                    </p>
-                  </div>
-                ) : (
+                {/* Original preview — always visible */}
+                <div className="space-y-1 mb-2">
+                  <p className="text-xs text-gray-400 font-medium">Original</p>
                   <img
                     src={imagePreview}
                     alt="Chest X-ray preview"
-                    className="w-full rounded-lg object-contain max-h-80 bg-black"
+                    className="w-full rounded-lg object-contain max-h-64 bg-black"
                   />
+                </div>
+                {/* GradCAM overlay — shown when available */}
+                {analysis.heatmap_base64 && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-gray-400 font-medium">AI Attention Map (GradCAM)</p>
+                    <img
+                      src={`data:image/png;base64,${analysis.heatmap_base64}`}
+                      alt="CXR with GradCAM heatmap"
+                      className="w-full rounded-lg object-contain max-h-64"
+                    />
+                    <p className="text-xs text-gray-400 text-center">
+                      highlighted region drove AI decision
+                    </p>
+                  </div>
                 )}
                 <button
                   onClick={handleReset}
