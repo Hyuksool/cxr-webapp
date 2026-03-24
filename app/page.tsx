@@ -152,9 +152,36 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-6">
+        {/* Original Image — shown at the top after analysis */}
+        {imagePreview && analysis && !isLoading && (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-gray-700">Original X-Ray</h2>
+              <span
+                className={`text-xs font-bold text-white px-2 py-1 rounded ${
+                  URGENCY_HEADER_COLORS[analysis.urgency_level] || "bg-gray-500"
+                }`}
+              >
+                {analysis.urgency_level.toUpperCase()}
+              </span>
+            </div>
+            <img
+              src={imagePreview}
+              alt="Chest X-ray"
+              className="w-full rounded-lg object-contain max-h-80 bg-black"
+            />
+            <button
+              onClick={handleReset}
+              className="mt-3 w-full py-2.5 bg-gray-100 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              Upload New X-Ray
+            </button>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left column: Upload + Image — on mobile after analysis, pushed below findings via order */}
-          <div className={`space-y-4 ${analysis && !isLoading ? "order-2 lg:order-1" : "order-1"}`}>
+          {/* Left column: Upload + Image preview (before analysis only) */}
+          <div className={`space-y-4 ${analysis && !isLoading ? "hidden" : "order-1"}`}>
             {/* Upload zone — always visible */}
             {(state === "idle" || state === "error" || !imagePreview) && (
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
@@ -163,7 +190,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* Image Preview — before analysis: show here (mobile sees upload → image → button) */}
+            {/* Image Preview — before analysis */}
             {imagePreview && !analysis && (
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
                 <h2 className="text-sm font-semibold text-gray-700 mb-3">Preview</h2>
@@ -184,7 +211,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* Loading indicator — show in left column when analyzing */}
+            {/* Loading indicator */}
             {isLoading && (
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
                 <LoadingSpinner
@@ -194,51 +221,6 @@ export default function Home() {
                       : "Generating radiology report with Claude..."
                   }
                 />
-              </div>
-            )}
-
-            {/* After analysis: Image + GradCAM moves below findings on mobile (order-last on mobile) */}
-            {imagePreview && analysis && (
-              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 order-last lg:order-none">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-gray-700">Image & GradCAM</h2>
-                  <span
-                    className={`text-xs font-bold text-white px-2 py-1 rounded ${
-                      URGENCY_HEADER_COLORS[analysis.urgency_level] || "bg-gray-500"
-                    }`}
-                  >
-                    {analysis.urgency_level.toUpperCase()}
-                  </span>
-                </div>
-                {/* Original preview — always visible */}
-                <div className="space-y-1 mb-2">
-                  <p className="text-xs text-gray-400 font-medium">Original</p>
-                  <img
-                    src={imagePreview}
-                    alt="Chest X-ray preview"
-                    className="w-full rounded-lg object-contain max-h-64 bg-black"
-                  />
-                </div>
-                {/* GradCAM overlay — shown when available */}
-                {analysis.heatmap_base64 && (
-                  <div className="space-y-1">
-                    <p className="text-xs text-gray-400 font-medium">AI Attention Map (GradCAM)</p>
-                    <img
-                      src={`data:image/png;base64,${analysis.heatmap_base64}`}
-                      alt="CXR with GradCAM heatmap"
-                      className="w-full rounded-lg object-contain max-h-64"
-                    />
-                    <p className="text-xs text-gray-400 text-center">
-                      highlighted region drove AI decision
-                    </p>
-                  </div>
-                )}
-                <button
-                  onClick={handleReset}
-                  className="mt-3 w-full py-2.5 bg-gray-100 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-200 transition-colors"
-                >
-                  Upload New X-Ray
-                </button>
               </div>
             )}
 
@@ -253,8 +235,8 @@ export default function Home() {
             )}
           </div>
 
-          {/* Right column: Results — on mobile after analysis, shown FIRST via order */}
-          <div className={`space-y-4 ${analysis && !isLoading ? "order-1 lg:order-2" : "order-2"}`}>
+          {/* Right column: Results */}
+          <div className={`space-y-4 ${analysis && !isLoading ? "lg:col-span-2" : "order-2"}`}>
             {/* Error */}
             {state === "error" && error && (
               <div className="bg-red-50 border border-red-200 rounded-xl p-4">
